@@ -1,0 +1,126 @@
+Imports System.IO.Ports
+
+Public Class Form1
+    Dim conectado As Boolean = False
+    Dim bombaEncendida As Boolean = False
+
+    Private Sub Form1_Load(sender As Object, e As EventArgs) Handles MyBase.Load
+        cmbPuertos.Items.AddRange(SerialPort.GetPortNames())
+        btnConectar.Text = "Conectar"
+        btnBombaManual.Text = "Encender Bomba"
+        lblActualizacion.Text = "Última actualización: —"
+    End Sub
+
+    Private Sub btnConectar_Click(sender As Object, e As EventArgs) Handles btnConectar.Click
+        Try
+            If Not conectado Then
+                SerialPort1.PortName = cmbPuertos.SelectedItem.ToString()
+                SerialPort1.BaudRate = 115200
+                SerialPort1.Open()
+                conectado = True
+                btnConectar.Text = "Desconectar"
+            Else
+                SerialPort1.Close()
+                conectado = False
+                btnConectar.Text = "Conectar"
+            End If
+        Catch ex As Exception
+            MessageBox.Show("Error al conectar: " & ex.Message)
+        End Try
+    End Sub
+
+    Private Sub btnBombaManual_Click(sender As Object, e As EventArgs) Handles btnBombaManual.Click
+        If Not conectado Then
+            MessageBox.Show("Primero conecta el puerto.")
+            Return
+        End If
+
+        bombaEncendida = Not bombaEncendida
+        Dim estado As String = If(bombaEncendida, "ON", "OFF")
+        Dim mensaje As String = $"BOMBA:{estado}"
+        Dim comando As String = $"AT+SEND=16,{mensaje.Length},{mensaje}"
+
+        Try
+            SerialPort1.Write(comando & vbCrLf)
+            btnBombaManual.Text = If(bombaEncendida, "Apagar Bomba", "Encender Bomba")
+            lblBomba.Text = $"Bomba (orden enviada): {estado}"
+        Catch ex As Exception
+            MessageBox.Show("Error al enviar comando: " & ex.Message)
+        End Try
+    End Sub
+
+    Private Sub SerialPort1_DataReceived(sender As Object, e As SerialDataReceivedEventArgs) Handles SerialPort1.DataReceived
+        Try
+            Dim linea As String = SerialPort1.ReadLine().Trim()
+
+            ' Eliminar encabezado +RCV=
+            If linea.StartsWith("+RCV=") Then
+                Dim idx As Integer = linea.IndexOf(",TEMP:")
+                If idx <> -1 Then
+                    linea = linea.Substring(idx + 1)
+                End If
+            End If
+
+            ' Extraer valores sin usar Split
+            Dim tempStr As String = ""
+            Dim humStr As String = ""
+            Dim bombaStr As String = ""
+
+            If linea.Contains("TEMP:") Then
+                Dim i = linea.IndexOf("TEMP:") + 5
+                Dim fin = linea.IndexOf(",", i)
+                If fin = -1 Then fin = linea.Length
+                tempStr = linea.Substring(i, fin - i)
+            End If
+
+            If linea.Contains("HUM:") Then
+                Dim i = linea.IndexOf("HUM:") + 4
+                Dim fin = linea.IndexOf(",", i)
+                If fin = -1 Then fin = linea.Length
+                humStr = linea.Substring(i, fin - i)
+            End If
+
+            If linea.Contains("BOMBA:") Then
+                Dim i = linea.IndexOf("BOMBA:") + 6
+                Dim fin = linea.IndexOf(",", i)
+                If fin = -1 Then fin = linea.Length
+                bombaStr = linea.Substring(i, fin - i).ToUpper()
+            End If
+
+            ' Mostrar en la interfaz
+            Me.Invoke(Sub()
+                          If tempStr <> "" Then
+                              lblTemp.Text = $"Temperatura: {tempStr} °C"
+                          End If
+
+                          If humStr <> "" AndAlso IsNumeric(humStr) Then
+                              Dim valor As Double = Val(humStr)
+                              Dim humPct As Double = ((4095 - valor) / 4095) * 100
+                              lblHumedad.Text = $"Humedad: {humPct:F1} %"
+
+                              ' Mostrar imagen
+                              If humPct > 30 Then
+                                  picHumedad.Image = My.Resources.humedo
+                              Else
+                                  picHumedad.Image = My.Resources.seco
+                              End If
+                          End If
+
+                          If bombaStr <> "" Then
+                              bombaEncendida = (bombaStr = "ON")
+                              lblBomba.Text = $"Bomba: {bombaStr}"
+                              btnBombaManual.Text = If(bombaEncendida, "Apagar Bomba", "Encender Bomba")
+                          End If
+
+                          lblActualizacion.Text = "Última actualización: " & DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss")
+                      End Sub)
+
+        Catch ex As Exception
+            ' Ignorar errores menores
+        End Try
+    End Sub
+
+    Private Sub Label9_Click(sender As Object, e As EventArgs) Handles Label9.Click
+
+    End Sub
+End Class
