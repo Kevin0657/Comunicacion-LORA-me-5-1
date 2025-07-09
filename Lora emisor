@@ -1,0 +1,95 @@
+#include <HardwareSerial.h>
+
+HardwareSerial lora(1);  // UART1: RX=2, TX=4
+
+const int pinHumedad = 34;
+const int pinTemperatura = 35;
+const int relePin = 32;
+const int ledVerde = 33;
+const int ledRojo = 25;
+const int pinBoton = 26; // NUEVO: botón físico
+
+const int UMBRAL_BAJO = 1500;   
+const int UMBRAL_ALTO = 2000;   
+
+bool bombaEncendida = false;
+bool ignorarSensor = false;     // Evita que el sensor cambie el estado justo después del botón
+unsigned long tiempoIgnorar = 0;
+
+void setup() {
+  Serial.begin(9600);
+  lora.begin(115200, SERIAL_8N1, 2, 4);
+
+  pinMode(relePin, OUTPUT);
+  pinMode(ledVerde, OUTPUT);
+  pinMode(ledRojo, OUTPUT);
+  pinMode(pinBoton, INPUT_PULLUP);  // botón con resistencia interna
+
+  digitalWrite(relePin, LOW);
+  digitalWrite(ledVerde, LOW);
+  digitalWrite(ledRojo, HIGH);
+
+  delay(1000);
+
+  lora.println("AT+ADDRESS=16");
+  delay(200);
+  lora.println("AT+NETWORKID=18");
+  delay(200);
+  lora.println("AT+BAND=915000000");
+  delay(200);
+}
+
+void loop() {
+  int humedad = analogRead(pinHumedad);
+  int temperatura = analogRead(pinTemperatura);
+  float tempCelsius = temperatura * 3.3 / 4095 / 0.01;
+
+  // 🟢 Botón presionado (LOW porque usamos INPUT_PULLUP)
+  static bool botonAnterior = HIGH;
+  bool botonActual = digitalRead(pinBoton);
+
+  if (botonAnterior == HIGH && botonActual == LOW) {
+    bombaEncendida = !bombaEncendida;
+    ignorarSensor = true;
+    tiempoIgnorar = millis();
+    Serial.println("🔘 Botón presionado: cambio manual de bomba");
+  }
+  botonAnterior = botonActual;
+
+  // 🔁 Después de 5 segundos volvemos a usar el sensor
+  if (ignorarSensor && millis() - tiempoIgnorar > 5000) {
+    ignorarSensor = false;
+  }
+
+  // 🌱 Control automático solo si no se presionó botón hace poco
+  if (!ignorarSensor) {
+    if (!bombaEncendida && humedad > UMBRAL_ALTO) {
+      bombaEncendida = true;
+    } else if (bombaEncendida && humedad < UMBRAL_BAJO) {
+      bombaEncendida = false;
+    }
+  }
+
+  digitalWrite(relePin, bombaEncendida ? HIGH : LOW);
+  digitalWrite(ledVerde, bombaEncendida ? HIGH : LOW);
+  digitalWrite(ledRojo, bombaEncendida ? LOW : HIGH);
+
+  String estadoBomba = bombaEncendida ? "ON" : "OFF";
+
+  String mensaje = "TEMP:" + String(tempCelsius, 1) +
+                   ",HUM:" + String(humedad) +
+                   ",BOMBA:" + estadoBomba;
+
+  lora.print("AT+SEND=17,");
+  lora.print(mensaje.length());
+  lora.print(",");
+  lora.println(mensaje);
+
+  Serial.print("🌡 TEMP: "); Serial.print(tempCelsius, 1); Serial.println(" °C");
+  Serial.print("💧 HUMEDAD: "); Serial.print(humedad);
+  Serial.println(humedad > UMBRAL_ALTO ? " (SECO)" : " (HÚMEDO)");
+  Serial.print("🚰 BOMBA: "); Serial.println(estadoBomba);
+  Serial.println("------------------------------");
+
+  delay(1000);
+}
