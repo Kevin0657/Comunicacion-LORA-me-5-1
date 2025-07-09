@@ -1,0 +1,112 @@
+from machine import UART, Pin
+import time
+
+# UART LoRa
+uart = UART(1, baudrate=115200, rx=5, tx=16)
+time.sleep(2)
+
+# LEDs
+led_verde = Pin(33, Pin.OUT)
+led_rojo = Pin(25, Pin.OUT)
+
+# Botón (GPIO26 con pull-up)
+boton = Pin(26, Pin.IN, Pin.PULL_UP)
+
+# Estado inicial de la bomba (usado si se presiona botón)
+bomba_encendida = False
+
+# Inicialización LEDs
+led_verde.value(0)
+led_rojo.value(1)
+
+# Configurar LoRa
+def enviar_comando_at(comando, espera=0.2):
+    uart.write(comando.encode() + b'\r\n')
+    time.sleep(espera)
+    while uart.any():
+        uart.readline()
+
+enviar_comando_at("AT+ADDRESS=17")
+enviar_comando_at("AT+NETWORKID=18")
+enviar_comando_at("AT+BAND=915000000")
+
+print("📡 Esperando datos LoRa...\n")
+
+# Variables para el botón
+ultimo_estado_boton = 1
+ultimo_cambio_boton = time.ticks_ms()
+
+while True:
+    # ----------------------------
+    # 1. Lectura del botón (flanco de bajada)
+    estado_boton = boton.value()
+    if ultimo_estado_boton == 1 and estado_boton == 0:
+        ahora = time.ticks_ms()
+        if time.ticks_diff(ahora, ultimo_cambio_boton) > 300:
+            # Invertir el estado de la bomba
+            bomba_encendida = not bomba_encendida
+            estado = "ON" if bomba_encendida else "OFF"
+
+            # Enviar comando manual al Arduino
+            mensaje = f"BOMBA:{estado}"
+            uart.write(f"AT+SEND=16,{len(mensaje)},{mensaje}\r\n".encode())
+            print(f"📤 Orden manual enviada: {mensaje}")
+
+            # Cambiar LEDs inmediatamente
+            led_verde.value(1 if bomba_encendida else 0)
+            led_rojo.value(0 if bomba_encendida else 1)
+
+            ultimo_cambio_boton = ahora
+    ultimo_estado_boton = estado_boton
+
+    # ----------------------------
+    # 2. Lectura de datos del Arduino
+    if uart.any():
+        try:
+            linea = uart.readline()
+            if linea:
+                texto = linea.decode().strip()
+
+                if texto.lower().startswith("rcv+"):
+                    texto = texto[4:]
+
+                # Eliminar basura del final si hay
+                idx = texto.rfind("-")
+                if idx != -1:
+                    posible_numeros = texto[idx+1:]
+                    if all(c.isdigit() or c == ',' for c in posible_numeros):
+                        texto = texto[:idx].strip()
+
+                print("📨 Recibido:", texto)
+
+                partes = texto.split(',')
+                for parte in partes:
+                    if parte.startswith("TEMP:"):
+                        temp = parte.split(":")[1]
+                        print(f"🌡 Temp: {temp} °C")
+
+                    elif parte.startswith("HUM:"):
+                        humedad = parte.split(":")[1]
+                        humedad_raw = float(humedad)
+                        humedad_pct = ((4095 - humedad_raw) / 4095) * 100
+                        print(f"💧 Humedad: {humedad_raw} ({humedad_pct:.1f}%)")
+
+                    elif parte.startswith("BOMBA:"):
+                        estado = parte.split(":")[1].strip().upper()
+                        if estado == "ON":
+                            bomba_encendida = True
+                            led_verde.value(1)
+                            led_rojo.value(0)
+                            print("✅ Bomba ENCENDIDA (LED VERDE)")
+                        elif estado == "OFF":
+                            bomba_encendida = False
+                            led_verde.value(0)
+                            led_rojo.value(1)
+                            print("⛔ Bomba APAGADA (LED ROJO)")
+
+                print("---------------------------")
+
+        except Exception as e:
+            print("⚠ Error:", e)
+
+    time.sleep(0.05)
